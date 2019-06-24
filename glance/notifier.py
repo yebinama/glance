@@ -424,12 +424,13 @@ class ImageProxy(NotificationProxy, domain_proxy.Image):
         data = self.repo.get_data(offset=offset, chunk_size=chunk_size)
         return self._get_chunk_data_iterator(data, chunk_size=chunk_size)
 
-    def set_data(self, data, size=None, backend=None):
+    def set_data(self, data, size=None, backend=None, set_active=True):
         self.send_notification('image.prepare', self.repo, backend=backend)
 
         notify_error = self.notifier.error
         try:
-            self.repo.set_data(data, size, backend=backend)
+            self.repo.set_data(data, size, backend=backend,
+                               set_active=set_active)
         except glance_store.StorageFull as e:
             msg = (_("Image storage media is full: %s") %
                    encodeutils.exception_to_unicode(e))

@@ -16,6 +16,7 @@ import os
 
 import glance_store as store_api
 from glance_store import backend
+from glance_store import exceptions as store_exceptions
 from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_utils import encodeutils
@@ -187,13 +188,16 @@ class _VerifyStaging(task.Task):
 
 class _ImportToStore(task.Task):
 
-    def __init__(self, task_id, task_type, image_repo, uri, image_id, backend):
+    def __init__(self, task_id, task_type, image_repo, uri, image_id, backend,
+                 allow_failure, set_active):
         self.task_id = task_id
         self.task_type = task_type
         self.image_repo = image_repo
         self.uri = uri
         self.image_id = image_id
         self.backend = backend
+        self.allow_failure = allow_failure
+        self.set_active = set_active
         super(_ImportToStore, self).__init__(
             name='%s-ImportToStore-%s' % (task_type, task_id))
 
@@ -244,12 +248,67 @@ class _ImportToStore(task.Task):
         # will need the file path anyways for our delete workflow for now.
         # For future proofing keeping this as is.
         image = self.image_repo.get(self.image_id)
-        image_import.set_image_data(image, file_path or self.uri, self.task_id,
-                                    backend=self.backend)
-
-        # NOTE(flaper87): We need to save the image again after the locations
-        # have been set in the image.
+        if image.status == "deleted":
+            raise exception.ImportTaskError("Image has been deleted, aborting"
+                                            " import.")
+        try:
+            image_import.set_image_data(image, file_path or self.uri,
+                                        self.task_id, backend=self.backend,
+                                        set_active=self.set_active)
+        # NOTE(yebinama): set_image_data catches Exception and raises from
+        # them. Can't be more specific on exceptions catched.
+        except Exception:
+            if not self.allow_failure:
+                raise
+            msg = (_("%(task_id)s of %(task_type)s failed but since "
+                     "allow_failure is set to true, continue.") %
+                   {'task_id': self.task_id, 'task_type': self.task_type})
+            LOG.warning(msg)
+            if self.backend is not None:
+                failed_import = image.extra_properties.get(
+                    'os_glance_failed_import', '').split(',')
+                failed_import.append(self.backend)
+                image.extra_properties[
+                    'os_glance_failed_import'] = ','.join(failed_import)
+        if self.backend is not None:
+            importing = image.extra_properties.get(
+                'os_glance_importing_to_stores', '').split(',')
+            try:
+                importing.remove(self.backend)
+                image.extra_properties[
+                    'os_glance_importing_to_stores'] = ','.join(importing)
+            except ValueError:
+                LOG.debug("Store %s not found in property "
+                          "os_glance_importing_to_stores.", self.backend)
+        # NOTE(flaper87): We need to save the image again after
+        # the locations have been set in the image.
         self.image_repo.save(image)
+
+    def revert(self, result, **kwargs):
+        """
+        Remove location from image in case of failure
+
+        :param result: taskflow result object
+        """
+        image = self.image_repo.get(self.image_id)
+        for i, location in enumerate(image.locations):
+            if location.get('metadata', {}).get('store') == self.backend:
+                try:
+                    image.locations.pop(i)
+                except (store_exceptions.NotFound,
+                        store_exceptions.Forbidden):
+                    msg = (_("Error deleting from store %{store}s when "
+                             "reverting.") % {'store': self.backend})
+                    LOG.warning(msg)
+                # NOTE(yebinama): Some store drivers doesn't document which
+                # exceptions they throw.
+                except Exception:
+                    msg = (_("Unexpected exception when deleting from store"
+                             "%{store}s.") % {'store': self.backend})
+                    LOG.warning(msg)
+                else:
+                    self.image_repo.save(image)
+                break
 
 
 class _SaveImage(task.Task):
@@ -336,7 +395,8 @@ def get_flow(**kwargs):
     image_id = kwargs.get('image_id')
     import_method = kwargs.get('import_req')['method']['name']
     uri = kwargs.get('import_req')['method'].get('uri')
-    backend = kwargs.get('backend')
+    stores = kwargs.get('backend', [None])
+    allow_failure = kwargs.get('import_req').get('allow_failure', False)
 
     separator = ''
     if not CONF.enabled_backends and not CONF.node_staging_uri.endswith('/'):
@@ -367,13 +427,20 @@ def get_flow(**kwargs):
     for plugin in import_plugins.get_import_plugins(**kwargs):
         flow.add(plugin)
 
-    import_to_store = _ImportToStore(task_id,
-                                     task_type,
-                                     image_repo,
-                                     file_uri,
-                                     image_id,
-                                     backend)
-    flow.add(import_to_store)
+    for idx, store in enumerate(stores, 1):
+        set_active = allow_failure or (idx == len(stores))
+        task_name = task_type + "-" + (store or "")
+        import_task = lf.Flow(task_name)
+        import_to_store = _ImportToStore(task_id,
+                                         task_name,
+                                         image_repo,
+                                         file_uri,
+                                         image_id,
+                                         store,
+                                         allow_failure,
+                                         set_active)
+        import_task.add(import_to_store)
+        flow.add(import_task)
 
     delete_task = lf.Flow(task_type).add(_DeleteFromFS(task_id, task_type))
     flow.add(delete_task)
@@ -393,6 +460,11 @@ def get_flow(**kwargs):
     image = image_repo.get(image_id)
     from_state = image.status
     image.status = 'importing'
+    image.extra_properties[
+        'os_glance_importing_to_stores'] = ','.join((store for store in
+                                                     stores if
+                                                     store is not None))
+    image.extra_properties['os_glance_failed_import'] = ''
     image_repo.save(image, from_state=from_state)
 
     return flow
