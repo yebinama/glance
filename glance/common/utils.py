@@ -29,6 +29,7 @@ except ImportError:
 from eventlet.green import socket
 
 import functools
+import glance_store
 import os
 import re
 import uuid
@@ -726,3 +727,28 @@ def evaluate_filter_op(value, operator, threshold):
 
     msg = _("Unable to filter on a unknown operator.")
     raise exception.InvalidFilterOperatorValue(msg)
+
+
+def get_stores_from_request(req, body):
+    """Processes a supplied request and extract stores from it
+
+    :param req: request to process
+    :param body: request body
+
+    :raises glance_store.UnknownScheme:  if a store is not valid
+    :return: a list of stores
+    """
+    try:
+        stores = body['stores']
+    except KeyError:
+        stores = [req.headers.get('x-image-meta-store',
+                                  CONF.glance_store.default_backend)]
+    else:
+        if 'x-image-meta-store' in req.headers:
+            msg = _("Stores parameter and x-image-meta-store header can't "
+                    "be both specified")
+            raise exc.HTTPBadRequest(explanation=msg)
+    # Validate each store
+    for store in stores:
+        glance_store.get_store_from_store_identifier(store)
+    return stores
