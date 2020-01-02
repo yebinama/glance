@@ -141,7 +141,7 @@ class ImagesController(object):
             raise webob.exc.HTTPNotFound(explanation=e.msg)
 
         if allow_failure and not CONF.enabled_backends:
-            msg = (_("Allow_failure can only bet set with enabled_backends %s")
+            msg = (_("Allow_failure can only be set with enabled_backends %s")
                    % uri)
             raise webob.exc.HTTPBadRequest(explanation=msg)
 

@@ -738,6 +738,13 @@ def get_stores_from_request(req, body):
     :raises glance_store.UnknownScheme:  if a store is not valid
     :return: a list of stores
     """
+    if body.get('all_stores', False):
+        if 'stores' in body or 'x-image-meta-store' in req.headers:
+            msg = _("All_stores parameter can't be used with "
+                    "x-image-meta-store header or stores parameter")
+            raise exc.HTTPBadRequest(explanation=msg)
+        return CONF.enabled_backends.keys()
+
     try:
         stores = body['stores']
     except KeyError:
