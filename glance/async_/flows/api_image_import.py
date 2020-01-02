@@ -28,6 +28,7 @@ from taskflow import task
 import glance.async_.flows._internal_plugins as internal_plugins
 import glance.async_.flows.plugins as import_plugins
 from glance.common import exception
+from glance.common.exception import ImportTaskError
 from glance.common.scripts.image_import import main as image_import
 from glance.common.scripts import utils as script_utils
 from glance.i18n import _, _LE, _LI
@@ -247,12 +248,11 @@ class _ImportToStore(task.Task):
         # will need the file path anyways for our delete workflow for now.
         # For future proofing keeping this as is.
         image = self.image_repo.get(self.image_id)
+        if image.status == "deleted":
+            raise ImportTaskError("Image is deleted, aborting import.")
         try:
             image_import.set_image_data(image, file_path or self.uri,
                                         self.task_id, backend=self.backend)
-            # NOTE(flaper87): We need to save the image again after
-            # the locations have been set in the image.
-            self.image_repo.save(image)
         # NOTE(yebinama): set_image_data catches Exception and reraise from
         # them. Can't be more specific.
         except Exception:
@@ -261,7 +261,26 @@ class _ImportToStore(task.Task):
             msg = (_("%(task_id)s of %(task_type)s failed but since "
                      "allow_failure is set to true, continue.") %
                    {'task_id': self.task_id, 'task_type': self.task_type})
+            if self.backend is not None:
+                failed_import = image.extra_properties.get(
+                    'os_glance_failed_import', '').split(',')
+                failed_import.append(self.backend)
+                image.extra_properties[
+                    'os_glance_failed_import'] = ','.join(failed_import)
             LOG.warning(msg)
+        if self.backend is not None:
+            importing = image.extra_properties.get(
+                'os_glance_importing_to_stores', '')
+            try:
+                importing.remove(self.backend)
+                image.extra_properties[
+                    'os_glance_importing_to_stores'] = ','.join(importing)
+            except ValueError:
+                LOG.debug("Store %s not found in property "
+                          "os_glance_importing_to_stores.", self.backend)
+        # NOTE(flaper87): We need to save the image again after
+        # the locations have been set in the image.
+        self.image_repo.save(image)
 
     def revert(self, result, **kwargs):
         """
@@ -407,7 +426,7 @@ def get_flow(**kwargs):
         flow.add(plugin)
 
     import_task = lf.Flow(task_type)
-    for store in stores:
+    for i, store in enumerate(stores, 1):
         import_to_store = _ImportToStore(task_id,
                                          task_type,
                                          image_repo,
@@ -436,6 +455,11 @@ def get_flow(**kwargs):
     image = image_repo.get(image_id)
     from_state = image.status
     image.status = 'importing'
+    image.extra_properties[
+        'os_glance_importing_to_stores'] = ','.join((store for store in
+                                                     stores if
+                                                     store is not None))
+    image.extra_properties['os_glance_failed_import'] = ''
     image_repo.save(image, from_state=from_state)
 
     return flow
