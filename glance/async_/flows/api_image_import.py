@@ -189,14 +189,14 @@ class _VerifyStaging(task.Task):
 class _ImportToStore(task.Task):
 
     def __init__(self, task_id, task_type, image_repo, uri, image_id, backend,
-                 allow_failure, set_active):
+                 all_stores_must_succeed, set_active):
         self.task_id = task_id
         self.task_type = task_type
         self.image_repo = image_repo
         self.uri = uri
         self.image_id = image_id
         self.backend = backend
-        self.allow_failure = allow_failure
+        self.all_stores_must_succeed = all_stores_must_succeed
         self.set_active = set_active
         super(_ImportToStore, self).__init__(
             name='%s-ImportToStore-%s' % (task_type, task_id))
@@ -258,25 +258,25 @@ class _ImportToStore(task.Task):
         # NOTE(yebinama): set_image_data catches Exception and raises from
         # them. Can't be more specific on exceptions catched.
         except Exception:
-            if not self.allow_failure:
+            if self.all_stores_must_succeed:
                 raise
             msg = (_("%(task_id)s of %(task_type)s failed but since "
-                     "allow_failure is set to true, continue.") %
+                     "all_stores_must_succeed is set to false, continue.") %
                    {'task_id': self.task_id, 'task_type': self.task_type})
             LOG.warning(msg)
             if self.backend is not None:
                 failed_import = image.extra_properties.get(
-                    'os_glance_failed_import', '').split(',')
+                    'os_glance_failed_import', '').split()
                 failed_import.append(self.backend)
                 image.extra_properties[
-                    'os_glance_failed_import'] = ','.join(failed_import)
+                    'os_glance_failed_import'] = ' '.join(failed_import)
         if self.backend is not None:
             importing = image.extra_properties.get(
-                'os_glance_importing_to_stores', '').split(',')
+                'os_glance_importing_to_stores', '').split()
             try:
                 importing.remove(self.backend)
                 image.extra_properties[
-                    'os_glance_importing_to_stores'] = ','.join(importing)
+                    'os_glance_importing_to_stores'] = ' '.join(importing)
             except ValueError:
                 LOG.debug("Store %s not found in property "
                           "os_glance_importing_to_stores.", self.backend)
@@ -396,7 +396,8 @@ def get_flow(**kwargs):
     import_method = kwargs.get('import_req')['method']['name']
     uri = kwargs.get('import_req')['method'].get('uri')
     stores = kwargs.get('backend', [None])
-    allow_failure = kwargs.get('import_req').get('allow_failure', False)
+    all_stores_must_succeed = kwargs.get('import_req').get(
+        'all_stores_must_succeed', True)
 
     separator = ''
     if not CONF.enabled_backends and not CONF.node_staging_uri.endswith('/'):
@@ -428,7 +429,7 @@ def get_flow(**kwargs):
         flow.add(plugin)
 
     for idx, store in enumerate(stores, 1):
-        set_active = allow_failure or (idx == len(stores))
+        set_active = (not all_stores_must_succeed) or (idx == len(stores))
         task_name = task_type + "-" + (store or "")
         import_task = lf.Flow(task_name)
         import_to_store = _ImportToStore(task_id,
@@ -437,7 +438,7 @@ def get_flow(**kwargs):
                                          file_uri,
                                          image_id,
                                          store,
-                                         allow_failure,
+                                         all_stores_must_succeed,
                                          set_active)
         import_task.add(import_to_store)
         flow.add(import_task)
@@ -461,7 +462,7 @@ def get_flow(**kwargs):
     from_state = image.status
     image.status = 'importing'
     image.extra_properties[
-        'os_glance_importing_to_stores'] = ','.join((store for store in
+        'os_glance_importing_to_stores'] = ' '.join((store for store in
                                                      stores if
                                                      store is not None))
     image.extra_properties['os_glance_failed_import'] = ''

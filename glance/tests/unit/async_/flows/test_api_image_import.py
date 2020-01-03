@@ -111,7 +111,7 @@ class TestImportToStoreTask(test_utils.BaseTestCase):
         img_repo = mock.MagicMock()
         image_import = import_flow._ImportToStore(TASK_ID1, TASK_TYPE,
                                                   img_repo, "http://url",
-                                                  IMAGE_ID1, "backend1", False,
+                                                  IMAGE_ID1, "store1", False,
                                                   True)
         image = self.img_factory.new_image(image_id=UUID1)
         image.status = "deleted"
@@ -119,11 +119,26 @@ class TestImportToStoreTask(test_utils.BaseTestCase):
         self.assertRaises(ImportTaskError, image_import.execute)
 
     @mock.patch("glance.async_.flows.api_image_import.image_import")
-    def test_raises_when_not_allow_failure(self, mock_import):
+    def test_remove_store_from_property(self, mock_import):
         img_repo = mock.MagicMock()
         image_import = import_flow._ImportToStore(TASK_ID1, TASK_TYPE,
                                                   img_repo, "http://url",
-                                                  IMAGE_ID1, "backend1", False,
+                                                  IMAGE_ID1, "store1", True,
+                                                  True)
+        extra_properties = {"os_glance_importing_to_stores": "store1 store2"}
+        image = self.img_factory.new_image(image_id=UUID1,
+                                           extra_properties=extra_properties)
+        img_repo.get.return_value = image
+        image_import.execute()
+        self.assertEqual(image.extra_properties[
+                             'os_glance_importing_to_stores'], "store2")
+
+    @mock.patch("glance.async_.flows.api_image_import.image_import")
+    def test_raises_when_all_stores_must_succeed(self, mock_import):
+        img_repo = mock.MagicMock()
+        image_import = import_flow._ImportToStore(TASK_ID1, TASK_TYPE,
+                                                  img_repo, "http://url",
+                                                  IMAGE_ID1, "store1", True,
                                                   True)
         image = self.img_factory.new_image(image_id=UUID1)
         img_repo.get.return_value = image
@@ -134,11 +149,11 @@ class TestImportToStoreTask(test_utils.BaseTestCase):
                           image_import.execute)
 
     @mock.patch("glance.async_.flows.api_image_import.image_import")
-    def test_doesnt_raise_when_allow_failure(self, mock_import):
+    def test_doesnt_raise_when_not_all_stores_must_succeed(self, mock_import):
         img_repo = mock.MagicMock()
         image_import = import_flow._ImportToStore(TASK_ID1, TASK_TYPE,
                                                   img_repo, "http://url",
-                                                  IMAGE_ID1, "backend1", True,
+                                                  IMAGE_ID1, "store1", False,
                                                   True)
         image = self.img_factory.new_image(image_id=UUID1)
         img_repo.get.return_value = image
@@ -148,6 +163,6 @@ class TestImportToStoreTask(test_utils.BaseTestCase):
         try:
             image_import.execute()
             self.assertEqual(image.extra_properties['os_glance_failed_import'],
-                             "backend1")
+                             "store1")
         except cursive_exception.SignatureVerificationError:
             self.fail("Exception shouldn't be raised")

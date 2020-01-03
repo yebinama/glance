@@ -105,7 +105,7 @@ class ImagesController(object):
         task_repo = self.gateway.get_task_repo(req.context)
         import_method = body.get('method').get('name')
         uri = body.get('method').get('uri')
-        allow_failure = body.get('allow_failure', False)
+        all_stores_must_succeed = body.get('all_stores_must_succeed', True)
 
         try:
             image = image_repo.get(image_id)
@@ -140,8 +140,9 @@ class ImagesController(object):
         except exception.NotFound as e:
             raise webob.exc.HTTPNotFound(explanation=e.msg)
 
-        if allow_failure and not CONF.enabled_backends:
-            msg = (_("Allow_failure can only be set with enabled_backends %s")
+        if (not all_stores_must_succeed) and not CONF.enabled_backends:
+            msg = (_("All_stores_must_succeed can only be set with "
+                     "enabled_backends %s")
                    % uri)
             raise webob.exc.HTTPBadRequest(explanation=msg)
 
