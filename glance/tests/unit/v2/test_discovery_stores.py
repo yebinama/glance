@@ -39,7 +39,7 @@ class TestInfoControllers(base.MultiStoreClearingUnitTest):
                           req)
 
     def test_get_stores(self):
-        available_stores = ['ceph1', 'file1']
+        available_stores = ['ceph1', 'file1', 'http']
         req = unit_test_utils.get_fake_request()
         output = self.controller.get_stores(req)
         self.assertIn('stores', output)

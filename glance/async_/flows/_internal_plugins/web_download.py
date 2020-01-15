@@ -13,6 +13,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import glance_store as store_api
 from glance_store import backend
 from oslo_config import cfg
 from oslo_log import log as logging
@@ -125,7 +126,13 @@ class _WebDownload(task.Task):
             image = self.image_repo.get(self.image_id)
             image.status = 'queued'
             self.image_repo.save(image)
-
+        if result is not None:
+            LOG.debug(_LE('Deleting image %(image_id)s from staging area.'),
+                      {'image_id': self.image_id})
+            if CONF.enabled_backends:
+                store_api.delete(result, None)
+            else:
+                store_api.delete_from_backend(result)
 
 def get_flow(**kwargs):
     """Return task flow for web-download.

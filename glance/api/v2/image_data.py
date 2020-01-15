@@ -111,13 +111,10 @@ class ImageDataController(object):
 
     @utils.mutating
     def upload(self, req, image_id, data, size):
-        backend = None
+        backends = None
         if CONF.enabled_backends:
-            backend = req.headers.get('x-image-meta-store',
-                                      CONF.glance_store.default_backend)
-
             try:
-                glance_store.get_store_from_store_identifier(backend)
+                backends = utils.get_stores_from_headers(req)
             except glance_store.UnknownScheme as exc:
                 raise webob.exc.HTTPBadRequest(explanation=exc.msg,
                                                request=req,
@@ -152,7 +149,7 @@ class ImageDataController(object):
                                  encodeutils.exception_to_unicode(e))
 
                 image_repo.save(image, from_state='queued')
-                image.set_data(data, size, backend=backend)
+                image.set_data(data, size, backend=backends)
 
                 try:
                     image_repo.save(image, from_state='saving')

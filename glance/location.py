@@ -430,6 +430,93 @@ class ImageProxy(glance.domain.proxy.Image):
                     self.image.image_id,
                     location)
 
+    def _set_locations_multi_stores(self, data, verifier, backends, size=None):
+        """
+        Store data on multiple backends
+
+        :param data: data to store
+        :param verifier: for signature verification
+        :param backends: list of stores
+        :param size: data size
+        """
+        hashing_algo = CONF['hashing_algorithm']
+        locations = []
+        for backend in backends:
+            if hasattr(data, 'seek'):  # filetype object, go back to start
+                data.seek(0)
+            (location, size, checksum,
+             multihash, loc_meta) = self.store_api.add_with_multihash(
+                CONF,
+                self.image.image_id,
+                utils.LimitingReader(utils.CooperativeReader(data),
+                                     CONF.image_size_cap),
+                size,
+                backend,
+                hashing_algo,
+                context=self.context,
+                verifier=verifier)
+            locations.append({'url': location, 'metadata': loc_meta,
+                              'status': 'active'})
+            if verifier is not None:
+                try:
+                    verifier.verify()
+                    LOG.info(_LI("Successfully verified signature for image %s"),
+                             self.image.image_id)
+                except crypto_exception.InvalidSignature:
+                    for loc in locations:
+                        self.store_api.delete(loc['url'],
+                                              loc['metadata'].get('backend'),
+                                              context=self.context)
+                    raise cursive_exception.SignatureVerificationError(
+                        _('Signature verification failed')
+                    )
+
+        self.image.locations = locations
+        self.image.checksum = checksum
+        self.image.os_hash_value = multihash
+        self.image.size = size
+        self.image.os_hash_algo = hashing_algo
+
+    def _set_locations_no_multi_stores(self, data, verifier, size=None):
+        """
+        Store data on default backend (multi_store not enabled)
+
+        :param data: data to store
+        :param verifier: for signature verification
+        :param size: data size
+        """
+        hashing_algo = CONF['hashing_algorithm']
+        (location,
+         size,
+         checksum,
+         multihash,
+         loc_meta) = self.store_api.add_to_backend_with_multihash(
+            CONF,
+            self.image.image_id,
+            utils.LimitingReader(utils.CooperativeReader(data),
+                                 CONF.image_size_cap),
+            size,
+            hashing_algo,
+            context=self.context,
+            verifier=verifier)
+        if verifier:
+            try:
+                verifier.verify()
+                LOG.info(_LI("Successfully verified signature for image %s"),
+                         self.image.image_id)
+            except crypto_exception.InvalidSignature:
+                self.store_api.delete_from_backend(location,
+                                                   context=self.context)
+                raise cursive_exception.SignatureVerificationError(
+                    _('Signature verification failed')
+                )
+        self.image.locations = [{'url': location, 'metadata': loc_meta,
+                                 'status': 'active'}]
+        self.image.checksum = checksum
+        self.image.os_hash_value = multihash
+        self.image.size = size
+        self.image.os_hash_algo = hashing_algo
+
     def set_data(self, data, size=None, backend=None):
         if size is None:
             size = 0  # NOTE(markwash): zero -> unknown size
@@ -437,7 +524,7 @@ class ImageProxy(glance.domain.proxy.Image):
         # Create the verifier for signature verification (if correct properties
         # are present)
         extra_props = self.image.extra_properties
-        if (signature_utils.should_create_verifier(extra_props)):
+        if signature_utils.should_create_verifier(extra_props):
             # NOTE(bpoulos): if creating verifier fails, exception will be
             # raised
             img_signature = extra_props[signature_utils.SIGNATURE]
@@ -454,57 +541,11 @@ class ImageProxy(glance.domain.proxy.Image):
         else:
             verifier = None
 
-        hashing_algo = CONF['hashing_algorithm']
         if CONF.enabled_backends:
-            (location, size, checksum,
-             multihash, loc_meta) = self.store_api.add_with_multihash(
-                CONF,
-                self.image.image_id,
-                utils.LimitingReader(utils.CooperativeReader(data),
-                                     CONF.image_size_cap),
-                size,
-                backend,
-                hashing_algo,
-                context=self.context,
-                verifier=verifier)
+            self._set_locations_multi_stores(data, verifier, backend, size)
         else:
-            (location,
-             size,
-             checksum,
-             multihash,
-             loc_meta) = self.store_api.add_to_backend_with_multihash(
-                CONF,
-                self.image.image_id,
-                utils.LimitingReader(utils.CooperativeReader(data),
-                                     CONF.image_size_cap),
-                size,
-                hashing_algo,
-                context=self.context,
-                verifier=verifier)
+            self._set_locations_no_multi_stores(data, verifier, size)
 
-        # NOTE(bpoulos): if verification fails, exception will be raised
-        if verifier:
-            try:
-                verifier.verify()
-                LOG.info(_LI("Successfully verified signature for image %s"),
-                         self.image.image_id)
-            except crypto_exception.InvalidSignature:
-                if CONF.enabled_backends:
-                    self.store_api.delete(location, loc_meta.get('backend'),
-                                          context=self.context)
-                else:
-                    self.store_api.delete_from_backend(location,
-                                                       context=self.context)
-                raise cursive_exception.SignatureVerificationError(
-                    _('Signature verification failed')
-                )
-
-        self.image.locations = [{'url': location, 'metadata': loc_meta,
-                                 'status': 'active'}]
-        self.image.size = size
-        self.image.checksum = checksum
-        self.image.os_hash_value = multihash
-        self.image.os_hash_algo = hashing_algo
         self.image.status = 'active'
 
     def get_data(self, offset=0, chunk_size=None):

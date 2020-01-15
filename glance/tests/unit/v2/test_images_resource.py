@@ -4770,3 +4770,39 @@ class TestMultiImagesController(base.MultiIsolatedUnitTest):
             self.assertRaises(webob.exc.HTTPConflict,
                               self.controller.import_image, request, UUID4,
                               {'method': {'name': 'web-download'}})
+
+    @mock.patch.object(glance.quota, '_calc_required_size')
+    @mock.patch.object(glance.location, '_check_image_location')
+    @mock.patch.object(glance.location.ImageRepoProxy, '_set_acls')
+    @mock.patch.object(store, 'get_size_from_uri_and_backend')
+    @mock.patch.object(store, 'get_size_from_backend')
+    def test_add_location_no_backend_in_metadata(self,
+                                                 mock_get_size,
+                                                 mock_get_size_uri,
+                                                 mock_set_acls,
+                                                 mock_check_loc,
+                                                 mock_calc):
+        mock_calc.return_value = 1
+        mock_get_size.return_value = 1
+        mock_get_size_uri.return_value = 1
+        self.config(show_multiple_locations=True)
+        image_id = str(uuid.uuid4())
+        self.images = [
+            _db_fixture(image_id, owner=TENANT1, checksum=CHKSUM,
+                        name='1',
+                        disk_format='raw',
+                        container_format='bare',
+                        status='queued'),
+        ]
+        self.db.image_create(None, self.images[0])
+        request = unit_test_utils.get_fake_request()
+        new_location = {'url': '%s/fake_location_1' % BASE_URI,
+                        'metadata': {}}
+        changes = [{'op': 'add', 'path': ['locations', '-'],
+                    'value': new_location}]
+        output = self.controller.update(request, image_id, changes)
+        self.assertEqual(image_id, output.image_id)
+        self.assertEqual(1, len(output.locations))
+        self.assertEqual(new_location, output.locations[0])
+        self.assertEqual('active', output.status)
+        self.assertEqual('http', output.locations[0]['metadata']['backend'])

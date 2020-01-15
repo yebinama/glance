@@ -121,16 +121,13 @@ class ImagesController(object):
                 msg = _("'disk_format' needs to be set before import")
                 raise exception.Conflict(msg)
 
-            backend = None
+            backends = None
             if CONF.enabled_backends:
-                backend = req.headers.get('x-image-meta-store',
-                                          CONF.glance_store.default_backend)
                 try:
-                    glance_store.get_store_from_store_identifier(backend)
-                except glance_store.UnknownScheme:
-                    msg = _("Store for scheme %s not found") % backend
-                    LOG.warn(msg)
-                    raise exception.Conflict(msg)
+                    backends = utils.get_stores_from_headers(req)
+                except glance_store.UnknownScheme as exc:
+                    LOG.warn(exc.msg)
+                    raise exception.Conflict(exc.msg)
         except exception.Conflict as e:
             raise webob.exc.HTTPConflict(explanation=e.msg)
         except exception.NotFound as e:
@@ -138,7 +135,7 @@ class ImagesController(object):
 
         task_input = {'image_id': image_id,
                       'import_req': body,
-                      'backend': backend}
+                      'backend': backends}
 
         if (import_method == 'web-download' and
            not utils.validate_import_uri(uri)):
@@ -451,6 +448,19 @@ class ImagesController(object):
 
         return new_val_data
 
+    def _populate_backend_metadata(self, locations):
+        if not CONF.enabled_backends:
+            return
+        for location in locations:
+            if location['metadata'].get('backend') is not None:
+                continue
+            try:
+                backend = glance_store.find_backend_for_url(location['url'])
+            except glance_store.exceptions.UnknownScheme as e:
+                raise webob.exc.HTTPBadRequest(
+                    explanation=encodeutils.exception_to_unicode(e))
+            location['metadata']['backend'] = six.text_type(backend)
+
     def _get_locations_op_pos(self, path_pos, max_pos, allow_max):
         if path_pos is None or max_pos is None:
             return None
@@ -476,6 +486,7 @@ class ImagesController(object):
 
         val_data = self._validate_validation_data(image, value)
 
+        self._populate_backend_metadata(value)
         try:
             # NOTE(flwang): _locations_proxy's setattr method will check if
             # the update is acceptable.
@@ -503,6 +514,7 @@ class ImagesController(object):
 
         val_data = self._validate_validation_data(image, [value])
 
+        self._populate_backend_metadata([value])
         pos = self._get_locations_op_pos(path_pos,
                                          len(image.locations), True)
         if pos is None:
