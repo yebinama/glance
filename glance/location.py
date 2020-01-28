@@ -447,7 +447,7 @@ class ImageProxy(glance.domain.proxy.Image):
         :param size: data size
         :return:
         """
-        hashing_algo = CONF['hashing_algorithm']
+        hashing_algo = self.image.os_hash_algo or CONF['hashing_algorithm']
         if CONF.enabled_backends:
             (location, size, checksum,
              multihash, loc_meta) = self.store_api.add_with_multihash(
@@ -474,7 +474,10 @@ class ImageProxy(glance.domain.proxy.Image):
                 hashing_algo,
                 context=self.context,
                 verifier=verifier)
-        self._verify_upload(verifier, location, loc_meta)
+        self._verify_signature(verifier, location, loc_meta)
+        for attr, data in {"size": size, "os_hash_value": multihash,
+                           "checksum": checksum}:
+            self._verify_uploaded_data(data, attr)
         self.image.locations.append({'url': location, 'metadata': loc_meta,
                                      'status': 'active'})
         self.image.checksum = checksum
@@ -482,12 +485,11 @@ class ImageProxy(glance.domain.proxy.Image):
         self.image.size = size
         self.image.os_hash_algo = hashing_algo
 
-    def _verify_upload(self, verifier, location, loc_meta):
+    def _verify_signature(self, verifier, location, loc_meta):
         """
         Verify signature of uploaded data.
 
         :param verifier: for signature verification
-        :return:
         """
         # NOTE(bpoulos): if verification fails, exception will be raised
         if verifier is not None:
@@ -506,6 +508,20 @@ class ImageProxy(glance.domain.proxy.Image):
                 raise cursive_exception.SignatureVerificationError(
                     _('Signature verification failed')
                 )
+
+    def _verify_uploaded_data(self, value, attribute_name):
+        """
+        Verify value of attribute_name uploaded data
+
+        :param value: value to compare
+        :param attribute_name: attribute name of the image to compare with
+        """
+        image_value = getattr(self.image, attribute_name)
+        if image_value is not None and value != image_value:
+            msg = _("%{attr}s of uploaded data is different from current "
+                    "image %{attr}s value.")
+            LOG.error(msg, {'attr': attribute_name})
+            raise exception.UploadException(msg % {'attr': attribute_name})
 
     def set_data(self, data, size=None, backend=None, set_active=True):
         if size is None:

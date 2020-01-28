@@ -1,0 +1,17 @@
+---
+features:
+  - |
+    Add ability to import image into multiple stores during `interoperable
+    image import process`_.
+upgrade:
+  - |
+    Add ability to import image into multiple stores during `interoperable
+    image import process`_.
+    This feature will only work if multiple stores are enabled in the
+    deployment.
+    It introduces 3 new optional body fields (``stores``, ``all_stores``,
+    ``all_stores_must_succeed``) to the `import API path`.
+    Users can follow workflow execution with 2 new reserved properties
+    ``os_glance_importing_to_stores`` and ``os_glance_failed_import``.
+
+    .. _`interoperable image import process`: https://developer.openstack.org/api-ref/image/v2/#interoperable-image-import
