@@ -111,7 +111,20 @@ class _WebDownload(task.Task):
                           {"error": encodeutils.exception_to_unicode(e),
                            "task_id": self.task_id})
 
-        path = self.store.add(self.image_id, data, 0)[0]
+        path, bytes_written = self.store.add(self.image_id, data, 0)[0:2]
+        try:
+            if bytes_written != int(data.headers['content-length']):
+                msg = (_("Task %(task_id)s failed because downloaded data "
+                         "size %(data_size)s is different from expected %("
+                         "expected)s") %
+                       {"task_id": self.task_id, "data_size": bytes_written,
+                        "expected": data.headers['content-length']})
+                LOG.error(msg)
+                raise exception.IncompleteData(msg, path=path)
+        except KeyError:
+            LOG.debug(
+                "Task %(task_id)s can't read content-length for uri %(uri)s",
+                {"task_id": self.task_id, "uri": self.uri})
 
         return path
 
@@ -126,6 +139,10 @@ class _WebDownload(task.Task):
             image = self.image_repo.get(self.image_id)
             image.status = 'queued'
             self.image_repo.save(image)
+            try:
+                result = result.exception.path
+            except AttributeError:
+                result = None
         if result is not None:
             LOG.debug(_LE('Deleting image %(image_id)s from staging area.'),
                       {'image_id': self.image_id})
@@ -133,6 +150,7 @@ class _WebDownload(task.Task):
                 store_api.delete(result, None)
             else:
                 store_api.delete_from_backend(result)
+
 
 def get_flow(**kwargs):
     """Return task flow for web-download.

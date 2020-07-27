@@ -456,3 +456,11 @@ class InvalidDataMigrationScript(GlanceException):
     message = _("Invalid data migration script '%(script)s'. A valid data "
                 "migration script must implement functions 'has_migrations' "
                 "and 'migrate'.")
+
+
+class IncompleteData(GlanceException):
+    message = _("The download is incomplete.")
+
+    def __init__(self, *args, **kwargs):
+        self.path = kwargs.get('path', None)
+        super(IncompleteData, self).__init__(*args, **kwargs)
