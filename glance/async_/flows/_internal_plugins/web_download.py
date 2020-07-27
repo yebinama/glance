@@ -110,7 +110,19 @@ class _WebDownload(task.Task):
                           {"error": encodeutils.exception_to_unicode(e),
                            "task_id": self.task_id})
 
-        path = self.store.add(self.image_id, data, 0)[0]
+        path, bytes_written = self.store.add(self.image_id, data, 0)[0:2]
+        try:
+            if bytes_written != data.headers['content-length']:
+                msg = (_("Task %(task_id)s failed because downladed data "
+                         "size %(data_size)s is different from expected %("
+                         "expected)s") %
+                       {"task_id": self.task_id, "data_size": bytes_written,
+                        "expected": data.headers['content-length']})
+                raise exception.ImportTaskError(msg)
+        except KeyError:
+            LOG.debug(
+                "Task %(task_id)s can't read content-length for uri %(uri)s",
+                {"task_id": self.task_id, "uri": self.uri})
 
         return path
 
